@@ -2,12 +2,12 @@ import { z } from "zod";
 import type { CatalogEntry } from "./contracts";
 import type { LlmOptions } from "../interpretation/config";
 import { createJsonClient } from "../interpretation/client";
+import { quoteLineInputSchema } from "../quotes/schemas";
 export type QuoteCandidate = { id: string; lines: { sku: string; quantity: number }[] };
-const quantity = z.number().int().positive().max(2147483647);
 const id = z.string().trim().min(1);
 const decisionSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("create"), sku: id, quantity }).strict(),
-  z.object({ action: z.literal("revise"), quoteId: id, sku: id, quantity }).strict(),
+  quoteLineInputSchema.extend({ action: z.literal("create") }),
+  quoteLineInputSchema.extend({ action: z.literal("revise"), quoteId: id }),
   z.object({ action: z.literal("inspect"), quoteId: id }).strict(),
   z.object({ action: z.literal("clarify"), reason: id, candidates: z.array(id) }).strict(),
 ]);

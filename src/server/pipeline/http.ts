@@ -1,13 +1,36 @@
 import { Prisma } from "@prisma/client";
-import { z, ZodError } from "zod";
-import { PipelineError } from "./contracts";
+import { ZodError } from "zod";
+import { identifierSchema, PipelineError } from "./contracts";
+
+const MAX_BODY_BYTES = 1_000_000;
+
 export async function body(request: Request) {
-  const text = await request.text();
-  if (text.length > 1_000_000) throw new PipelineError(413, "Request body is too large.");
+  // Enforce the limit while reading, including requests without Content-Length.
+  const reader = request.body?.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let size = 0;
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_BODY_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          throw new PipelineError(413, "Request body is too large.");
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+      text += decoder.decode();
+    } finally {
+      reader.releaseLock();
+    }
+  }
   try { return JSON.parse(text); } catch { throw new PipelineError(400, "Request body must be JSON."); }
 }
 export function customer(request: Request) {
-  return z.string().trim().min(1).max(200).parse(new URL(request.url).searchParams.get("customer"));
+  return identifierSchema.parse(new URL(request.url).searchParams.get("customer"));
 }
 export async function respond(operation: () => Promise<unknown>) {
   try { return Response.json(await operation()); }

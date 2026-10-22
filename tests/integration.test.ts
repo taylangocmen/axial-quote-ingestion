@@ -134,6 +134,23 @@ test('ambiguous cancellation is visible with both candidates and only explicit r
   assert.equal((await pipeline.unresolved(initial.customer_id)).messages.length, 0);
   await assert.rejects(pipeline.resolve(result.message_id, { ...input, quote_id: before.quotes[0].quote_id }), (e: any) => e.status === 409);
 });
+test('review queue preserves per-message candidates and excludes other customers', async () => {
+  await complete();
+  const quotes = (await pipeline.quotes(initial.customer_id)).quotes;
+  await pipeline.message(events[4]);
+  await pipeline.message({ ...events[4], message_id: 'second-review' });
+  const foreign = await db.quote.create({ data: { customerId: 'other-customer' } });
+  const message = await db.message.findUniqueOrThrow({ where: { externalId: 'second-review' } });
+  await db.message.update({
+    where: { id: message.id },
+    data: { candidateQuoteIds: [quotes[1].quote_id, foreign.id] },
+  });
+  const queue = await pipeline.unresolved(initial.customer_id);
+  assert.equal(queue.messages.length, 2);
+  assert.deepEqual(queue.messages.find(m => m.external_id === events[4].message_id)!.candidates.map(q => q.quote_id).sort(), quotes.map(q => q.quote_id).sort());
+  assert.deepEqual(queue.messages.find(m => m.external_id === 'second-review')!.candidates.map(q => q.quote_id), [quotes[1].quote_id]);
+});
+
 test('customer boundaries apply to routing, reads, chat ownership and foreign keys', async () => {
   const first = await pipeline.ingest(initial) as any;
   await assert.rejects(pipeline.message({ ...events[0], customer_id: 'other' }), (e: any) => e.status === 409);

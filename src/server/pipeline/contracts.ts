@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-const id = z.string().trim().min(1).max(200);
+export const identifierSchema = z.string().trim().min(1).max(200);
+const id = identifierSchema;
 export const historyMessageSchema = z.object({
   direction: z.enum(["inbound", "outbound"]),
   timestamp: z.iso.datetime({ offset: true }),

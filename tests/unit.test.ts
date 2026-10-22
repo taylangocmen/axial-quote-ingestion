@@ -6,6 +6,40 @@ import { createInterpreter } from '../src/server/interpretation/interpreter';
 import { INTERPRETATION_PROMPT } from '../src/server/interpretation/prompt';
 import { ingestSchema, eventSchema } from '../src/server/pipeline/contracts';
 import { initial, events, catalog, context } from './fixtures';
+import { body, respond } from '../src/server/pipeline/http';
+
+test('JSON body reader preserves UTF-8 characters split across chunks', async () => {
+  const value = { text: 'cotización' };
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+      controller.close();
+    },
+  });
+  assert.deepEqual(await body({ body: stream } as Request), value);
+});
+
+test('JSON body reader rejects oversized streamed UTF-8 by bytes and cancels the stream', async () => {
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Below the old character limit, but above the byte limit.
+      controller.enqueue(new TextEncoder().encode(JSON.stringify('é'.repeat(500_000))));
+    },
+    cancel() { cancelled = true; },
+  });
+  const response = await respond(() => body({ body: stream } as Request));
+  assert.equal(response.status, 413);
+  assert.equal(cancelled, true);
+});
+
+test('empty and malformed JSON bodies return a client error', async () => {
+  for (const text of ['', '{broken']) {
+    const response = await respond(() => body(new Request('http://localhost', { method: 'POST', body: text })));
+    assert.equal(response.status, 400);
+  }
+});
 
 const good = () => ({ items: [{ sku: catalog[0].sku, quantity: 20, sourceMessageIndexes: [0] }], unresolved: [] });
 test('structured interpretation is ready only after catalog and provenance validation', () => {

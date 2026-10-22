@@ -24,6 +24,8 @@ test('model cannot invent a quote, line, SKU, quantity or automatic cancellation
     { action: 'inspect', quoteId: 'other-customer-quote' },
     { action: 'create', sku: 'invented', quantity: 1 },
     { action: 'create', sku: catalog[0].sku, quantity: -1 },
+    { action: 'create', sku: catalog[0].sku, quantity: 2147483648 },
+    { action: 'create', sku: catalog[0].sku, quantity: 1, extra: true },
     { action: 'revise', quoteId: 'Q1', sku: catalog[3].sku, quantity: 4 },
     { action: 'revise', quoteId: 'Q1', sku: catalog[0].sku, quantity: 1.5 },
     { action: 'clarify', reason: 'unclear', candidates: ['invented'] },

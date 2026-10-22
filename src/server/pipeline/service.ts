@@ -60,6 +60,20 @@ function existingBootstrap(existing: { customerId: string; bootstrapHash: string
   return existing.bootstrapHash === digest && existing.bootstrapResponse ? existing.bootstrapResponse : undefined;
 }
 
+async function holdForReview(tx: Tx, messageId: string, reason: string, candidates: string[]) {
+  const result = { status: "needs_clarification", message_id: messageId, reason, candidates };
+  await tx.message.update({
+    where: { id: messageId },
+    data: {
+      processingStatus: "needs_clarification",
+      processingReason: reason,
+      candidateQuoteIds: candidates,
+      result,
+    },
+  });
+  return result;
+}
+
 export class QuotePipeline {
   constructor(private db: PrismaClient, private interpret: Interpreter = createInterpreter(llmOptionsFromEnv()), private route: Router = createRouter(llmOptionsFromEnv())) {}
 
@@ -115,42 +129,41 @@ export class QuotePipeline {
       await conversation(tx, input.conversation_id, input.customer_id);
       const message = await tx.message.create({ data: { externalId: input.message_id, requestHash: digest, conversationId: input.conversation_id,
         customerId: input.customer_id, direction: input.direction, timestamp: new Date(input.timestamp), text: input.text } });
-      const quotes = await tx.quote.findMany({ where: { customerId: input.customer_id, status: "draft" }, include: { lines: true }, orderBy: { createdAt: "asc" } });
+      if (input.direction === "outbound") {
+        const result = { status: "recorded", message_id: message.id };
+        await tx.message.update({ where: { id: message.id }, data: { processingStatus: "processed", result } });
+        return result;
+      }
+      const quotes = await tx.quote.findMany({
+        where: { customerId: input.customer_id, status: "draft" },
+        select: { id: true, lines: { select: { sku: true, quantity: true }, orderBy: { sku: "asc" } } },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
       const catalog = await tx.catalogItem.findMany();
-      let decision: RouteDecision | null = null;
-      if (input.direction === "inbound") {
-        try { decision = await this.route(input.text, quotes, catalog); }
-        catch { decision = { action: "clarify", reason: "Message interpretation failed; human review required.", candidates: quotes.map(q => q.id) }; }
+      let decision: RouteDecision;
+      try { decision = await this.route(input.text, quotes, catalog); }
+      catch { decision = { action: "clarify", reason: "Message interpretation failed; human review required.", candidates: quotes.map(q => q.id) }; }
+      if (decision.action === "clarify") {
+        return holdForReview(tx, message.id, decision.reason, decision.candidates);
       }
-      let result: unknown;
-      if (!decision) {
-        result = { status: "recorded", message_id: message.id };
-      } else if (decision.action === "clarify") {
-        result = { status: "needs_clarification", message_id: message.id, reason: decision.reason, candidates: decision.candidates };
-        await tx.message.update({ where: { id: message.id }, data: { processingStatus: "needs_clarification", processingReason: decision.reason, candidateQuoteIds: decision.candidates, result: json(result) } });
-        return json(result);
+      let quoteId: string;
+      if (decision.action === "create") {
+        quoteId = await createQuote(tx, input.customer_id, input.conversation_id, [{ sku: decision.sku, quantity: decision.quantity }], [message.id]);
       } else {
-        let quoteId: string;
-        if (decision.action === "create") {
-          quoteId = await createQuote(tx, input.customer_id, input.conversation_id, [{ sku: decision.sku, quantity: decision.quantity }], [message.id]);
-        } else {
-          quoteId = decision.quoteId;
-          const later = await tx.quoteActivityMessage.findFirst({ where: { activity: { quoteId }, message: { timestamp: { gt: new Date(input.timestamp) } } } });
-          if (later) {
-            result = { status: "needs_clarification", message_id: message.id, reason: "Message predates quote evidence; review ordering before applying.", candidates: [quoteId] };
-            await tx.message.update({ where: { id: message.id }, data: { processingStatus: "needs_clarification", processingReason: "Out-of-order message", candidateQuoteIds: [quoteId], result: json(result) } });
-            return json(result);
-          }
-          if (decision.action === "revise") {
-            const before = await tx.quoteLine.findUniqueOrThrow({ where: { quoteId_sku: { quoteId, sku: decision.sku } } });
-            await tx.quoteLine.update({ where: { quoteId_sku: { quoteId, sku: decision.sku } }, data: { quantity: decision.quantity } });
-            await tx.quote.update({ where: { id: quoteId }, data: { updatedAt: new Date() } });
-            await activity(tx, quoteId, input.customer_id, "quantity_changed", [message.id], { sku: decision.sku, quantity: decision.quantity }, { sku: before.sku, quantity: before.quantity }, "LLM selected an existing customer quote and line; structural constraints validated.");
-          }
-          await link(tx, quoteId, input.conversation_id, input.customer_id, [message.id]);
+        quoteId = decision.quoteId;
+        const later = await tx.quoteActivityMessage.findFirst({ where: { activity: { quoteId }, message: { timestamp: { gt: new Date(input.timestamp) } } } });
+        if (later) {
+          return holdForReview(tx, message.id, "Message predates quote evidence; review ordering before applying.", [quoteId]);
         }
-        result = { status: "processed", action: decision.action, quote: serializeQuote(await tx.quote.findUniqueOrThrow({ where: { id: quoteId }, include: includeQuote })) };
+        if (decision.action === "revise") {
+          const before = await tx.quoteLine.findUniqueOrThrow({ where: { quoteId_sku: { quoteId, sku: decision.sku } } });
+          await tx.quoteLine.update({ where: { quoteId_sku: { quoteId, sku: decision.sku } }, data: { quantity: decision.quantity } });
+          await tx.quote.update({ where: { id: quoteId }, data: { updatedAt: new Date() } });
+          await activity(tx, quoteId, input.customer_id, "quantity_changed", [message.id], { sku: decision.sku, quantity: decision.quantity }, { sku: before.sku, quantity: before.quantity }, "LLM selected an existing customer quote and line; structural constraints validated.");
+        }
+        await link(tx, quoteId, input.conversation_id, input.customer_id, [message.id]);
       }
+      const result = { status: "processed", action: decision.action, quote: serializeQuote(await tx.quote.findUniqueOrThrow({ where: { id: quoteId }, include: includeQuote })) };
       await tx.message.update({ where: { id: message.id }, data: { processingStatus: "processed", result: json(result) } });
       return json(result);
     }, { timeout: 30000 });
@@ -167,10 +180,19 @@ export class QuotePipeline {
   }
   async unresolved(customerId: string) {
     const messages = await this.db.message.findMany({ where: { customerId, processingStatus: "needs_clarification" }, orderBy: [{ receivedAt: "asc" }, { id: "asc" }] });
-    return { messages: await Promise.all(messages.map(async message => ({ message_id: message.id, external_id: message.externalId, conversation_id: message.conversationId,
+    const candidateIds = [...new Set(messages.flatMap(message => message.candidateQuoteIds))];
+    const candidates = candidateIds.length === 0 ? [] : await this.db.quote.findMany({
+      where: { id: { in: candidateIds }, customerId },
+      include: includeQuote,
+    });
+    const byId = new Map(candidates.map(quote => [quote.id, serializeQuote(quote)]));
+    return { messages: messages.map(message => ({ message_id: message.id, external_id: message.externalId, conversation_id: message.conversationId,
       text: message.text, reason: message.processingReason,
-      candidates: (await this.db.quote.findMany({ where: { id: { in: message.candidateQuoteIds }, customerId }, include: includeQuote })).map(serializeQuote),
-    }))) };
+      candidates: message.candidateQuoteIds.flatMap(id => {
+        const quote = byId.get(id);
+        return quote ? [quote] : [];
+      }),
+    })) };
   }
   async resolve(messageId: string, raw: unknown) {
     const input = resolutionSchema.parse(raw);
