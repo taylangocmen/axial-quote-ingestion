@@ -3,11 +3,121 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model CatalogItem {
   sku         String @id
   description String
+  quoteLines  QuoteLine[]
+}
+
+model Quote {
+  id         String      @id @default(cuid())
+  customerId String
+  // draft or cancelled; enforced by the SQL migration.
+  status     String      @default("draft")
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  lines      QuoteLine[]
+  conversations QuoteConversation[]
+  activities    QuoteActivity[]
+
+  // Composite target for customer-scoped foreign keys.
+  @@unique([id, customerId])
+  @@index([customerId])
+}
+
+model QuoteLine {
+  quoteId  String
+  sku      String
+  // Positive integer CHECK constraint lives in the SQL migration.
+  quantity Int
+  quote    Quote       @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  item     CatalogItem @relation(fields: [sku], references: [sku], onDelete: Restrict)
+
+  @@id([quoteId, sku])
+}
+
+model Conversation {
+  // Upstream chat identifier, e.g. wa-thread-411.
+  id         String @id
+  customerId String
+  createdAt  DateTime @default(now())
+  bootstrapHash String?
+  bootstrapResponse Json?
+  messages   Message[]
+  quotes     QuoteConversation[]
+
+  @@unique([id, customerId])
+  @@index([customerId])
+}
+
+model Message {
+  id             String @id @default(cuid())
+  // Nullable because initial conversation history has no webhook IDs.
+  externalId     String? @unique
+  conversationId String
+  customerId     String
+  // inbound or outbound; constrained in the SQL migration.
+  direction      String
+  text           String
+  timestamp      DateTime
+  receivedAt     DateTime @default(now())
+  // pending, processed, or needs_clarification; no quote assignment required.
+  processingStatus String @default("pending")
+  processingReason String?
+  requestHash String?
+  result Json?
+  candidateQuoteIds String[] @default([])
+  resolution Json?
+  conversation   Conversation @relation(fields: [conversationId, customerId], references: [id, customerId], onDelete: Restrict, onUpdate: Restrict)
+  activities     QuoteActivityMessage[]
+
+  @@unique([id, customerId])
+  @@index([conversationId, timestamp])
+  @@index([customerId, processingStatus])
+}
+
+model QuoteConversation {
+  quoteId        String
+  conversationId String
+  // Shared by both foreign keys, preventing cross-customer associations.
+  customerId     String
+  linkedAt       DateTime @default(now())
+  quote          Quote @relation(fields: [quoteId, customerId], references: [id, customerId], onDelete: Restrict, onUpdate: Restrict)
+  conversation   Conversation @relation(fields: [conversationId, customerId], references: [id, customerId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([quoteId, conversationId])
+  @@index([conversationId])
+}
+
+model QuoteActivity {
+  id         String @id @default(cuid())
+  quoteId    String
+  customerId String
+  // quote_created, quantity_changed, conversation_linked, or quote_cancelled.
+  action     String
+  beforeState Json?
+  afterState  Json?
+  reason      String?
+  createdAt   DateTime @default(now())
+  quote       Quote @relation(fields: [quoteId, customerId], references: [id, customerId], onDelete: Restrict, onUpdate: Restrict)
+  sources     QuoteActivityMessage[]
+
+  @@unique([id, customerId])
+  @@index([quoteId, createdAt])
+}
+
+model QuoteActivityMessage {
+  activityId String
+  messageId  String
+  // Evidence must belong to the same customer as the activity's quote.
+  customerId String
+  activity   QuoteActivity @relation(fields: [activityId, customerId], references: [id, customerId], onDelete: Restrict, onUpdate: Restrict)
+  message    Message @relation(fields: [messageId, customerId], references: [id, customerId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@id([activityId, messageId])
+  @@index([messageId])
 }

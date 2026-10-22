@@ -1,5 +1,8 @@
 # Axial quote ingestion analysis and implementation plan
 
+**Historical planning document.** The implementation now uses Next.js, TypeScript, Prisma, and local PostgreSQL. SQLite/Python suggestions below are superseded. See README.md for the current design and IMPLEMENTATION_REPORT.md for tested results.
+
+
 Original analysis prepared October 21, 2026. Update: the first implementation milestone now uses a minimal Next.js + TypeScript + Zod + Prisma 6 / SQLite scaffold, following the subsequent discussion. Dependencies and runtime checks remain pending. The Python proposal and file layout below are retained as historical analysis, not the current implementation choice. See README.md for the current starter.
 
 The original proposed approach was a small Python API with FastAPI, Pydantic, and file-backed SQLite. The chosen TypeScript starter preserves the central plan: build the quote state engine first using structured operations, then connect conversation extraction to it. Most of the engineering effort should go into selecting the correct quote, applying changes atomically, and explaining why each change happened.

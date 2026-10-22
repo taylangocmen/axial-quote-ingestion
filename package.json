@@ -2,17 +2,21 @@
   "name": "axial-quote-ingestion",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": ">=22.12.0 <23" },
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "prisma db seed"
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test:unit": "node --import tsx --test --test-concurrency=1 tests/unit.test.ts",
+    "test:integration": "node --import tsx --test --test-concurrency=1 tests/integration.test.ts",
+    "db:deploy": "prisma migrate deploy"
   },
-  "prisma": { "seed": "tsx prisma/seed.ts" },
   "dependencies": {
     "@prisma/client": "6.19.3",
     "next": "16.4.2",
@@ -25,7 +29,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "prisma": "6.19.3",
-    "tsx": "4.23.1",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "tsx": "4.23.1"
   }
 }

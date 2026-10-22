@@ -1,0 +1,8 @@
+{
+  "message_id": "wamid.example.5",
+  "customer_id": "C-10029",
+  "conversation_id": "wa-thread-662",
+  "direction": "inbound",
+  "timestamp": "2026-02-11T10:18:00Z",
+  "text": "mejor cancelalo"
+}

@@ -1,0 +1,8 @@
+{
+  "message_id": "wamid.example.2",
+  "customer_id": "C-10029",
+  "conversation_id": "wa-thread-662",
+  "direction": "inbound",
+  "timestamp": "2026-02-11T10:15:00Z",
+  "text": "Buen dia, soy Mario de compras de ACME. Alice me pasó con ustedes, me confirmas qué lleva la cotización de las lonas?"
+}
