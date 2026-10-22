@@ -1,5 +1,8 @@
 # Requirements audit
 
+> Historical report: this verification describes the earlier rules-based implementation. The current revision removes language patterns and uses the configured LLM for Phase 1 and Phase 2. Revised tests have not been run; see README.md and LLM_SETUP.md for current behavior and limits.
+
+
 Checked October 22, 2026 against all five pages of `[Axial] Quote Ingestion & State Management Challenge .pdf` and the local implementation. All specified pipeline behaviors and both optional extras are implemented and covered by passing tests. Repository submission is still outstanding. This is a bounded assignment implementation, not proof of general natural-language accuracy.
 
 ## Requirement-by-requirement evidence

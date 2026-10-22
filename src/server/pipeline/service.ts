@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { ingestSchema, eventSchema, resolutionSchema, PipelineError, type IngestInput } from "./contracts";
+import { llmOptionsFromEnv } from "../interpretation/config";
 import { createInterpreter, type Interpreter } from "../interpretation/interpreter";
-import { routeMessage } from "./routing";
-import { normalize } from "../interpretation/products";
+import { createRouter, type Router, type RouteDecision } from "./routing";
 import type { InterpretationDecision } from "../interpretation/validate";
 import { createQuoteInputSchema } from "../quotes/schemas";
 
@@ -61,7 +61,7 @@ function existingBootstrap(existing: { customerId: string; bootstrapHash: string
 }
 
 export class QuotePipeline {
-  constructor(private db: PrismaClient, private interpret: Interpreter = createInterpreter({ url: process.env.LOCAL_LLM_URL, model: process.env.LOCAL_LLM_MODEL })) {}
+  constructor(private db: PrismaClient, private interpret: Interpreter = createInterpreter(llmOptionsFromEnv()), private route: Router = createRouter(llmOptionsFromEnv())) {}
 
   async ingest(raw: unknown) {
     const input = ingestSchema.parse(raw);
@@ -117,7 +117,11 @@ export class QuotePipeline {
         customerId: input.customer_id, direction: input.direction, timestamp: new Date(input.timestamp), text: input.text } });
       const quotes = await tx.quote.findMany({ where: { customerId: input.customer_id, status: "draft" }, include: { lines: true }, orderBy: { createdAt: "asc" } });
       const catalog = await tx.catalogItem.findMany();
-      const decision = input.direction === "outbound" ? null : routeMessage(input.text, quotes, catalog);
+      let decision: RouteDecision | null = null;
+      if (input.direction === "inbound") {
+        try { decision = await this.route(input.text, quotes, catalog); }
+        catch { decision = { action: "clarify", reason: "Message interpretation failed; human review required.", candidates: quotes.map(q => q.id) }; }
+      }
       let result: unknown;
       if (!decision) {
         result = { status: "recorded", message_id: message.id };
@@ -141,7 +145,7 @@ export class QuotePipeline {
             const before = await tx.quoteLine.findUniqueOrThrow({ where: { quoteId_sku: { quoteId, sku: decision.sku } } });
             await tx.quoteLine.update({ where: { quoteId_sku: { quoteId, sku: decision.sku } }, data: { quantity: decision.quantity } });
             await tx.quote.update({ where: { id: quoteId }, data: { updatedAt: new Date() } });
-            await activity(tx, quoteId, input.customer_id, "quantity_changed", [message.id], { sku: decision.sku, quantity: decision.quantity }, { sku: before.sku, quantity: before.quantity }, "Unique product and quantity evidence across customer quotes.");
+            await activity(tx, quoteId, input.customer_id, "quantity_changed", [message.id], { sku: decision.sku, quantity: decision.quantity }, { sku: before.sku, quantity: before.quantity }, "LLM selected an existing customer quote and line; structural constraints validated.");
           }
           await link(tx, quoteId, input.conversation_id, input.customer_id, [message.id]);
         }
@@ -149,7 +153,7 @@ export class QuotePipeline {
       }
       await tx.message.update({ where: { id: message.id }, data: { processingStatus: "processed", result: json(result) } });
       return json(result);
-    }, { timeout: 10000 });
+    }, { timeout: 30000 });
   }
 
   async quotes(customerId: string) {
@@ -182,7 +186,7 @@ export class QuotePipeline {
       if (message.processingStatus !== "needs_clarification") throw new PipelineError(409, "Message is not awaiting review.");
       let result: unknown = { status: "dismissed", message_id: message.id };
       if (input.action === "cancel_quote") {
-        if (!/cancel/.test(normalize(message.text)) || !message.candidateQuoteIds.includes(input.quote_id)) throw new PipelineError(409, "Select a candidate from a cancellation request.");
+        if (!message.candidateQuoteIds.includes(input.quote_id)) throw new PipelineError(409, "Select a candidate from this review request.");
         const quote = await tx.quote.findFirst({ where: { id: input.quote_id, customerId: input.customer_id, status: "draft" } });
         if (!quote) throw new PipelineError(409, "Candidate is no longer a draft quote.");
         await tx.quote.update({ where: { id: quote.id }, data: { status: "cancelled" } });

@@ -9,7 +9,7 @@ Requires Node 22.12+ within Node 22 and local PostgreSQL. On a fresh checkout:
 ```sh
 npm ci
 cp .env.example .env
-# Set YOUR_LOCAL_USER in .env to your PostgreSQL role.
+# Set YOUR_LOCAL_USER and your LLM provider/model/API key in .env.
 createdb -h 127.0.0.1 axial_quote_ingestion
 npm run db:generate
 npm run db:deploy
@@ -40,7 +40,7 @@ QuoteActivity * ── * Message        via QuoteActivityMessage
 
 The join table lets one chat feed several quotes and several chats feed one quote. Messages can exist before they are assigned. Activities record before/after changes and their source messages, available at `GET /api/quotes/{id}/history?customer=C-10029`. Customer-scoped foreign keys prevent links across customers; catalog foreign keys, unique quote/SKU pairs and positive-quantity constraints protect quote lines.
 
-A new message is validated and checked for replay by message ID. Inside a customer-scoped transaction lock, routing examines **all draft quotes for that customer**, matching product references and quantity evidence. “No 20” identifies the frontlit line in event 1; “aparte” creates a new quote in event 3. In event 4, “los acrilicos” selects Q-002 even though Mario's chat previously linked only to Q-001. The chat records context but does not determine the target. Updates, chat associations, history and the replay response commit together. Multiple matches or stale revisions are held for review.
+A new message is validated and checked for replay by message ID. Inside a customer-scoped transaction lock, the LLM receives the message, catalog and **all draft quotes for that customer**, and proposes a create, revise, inspect or clarify action. Code validates the action, catalog SKU, target quote/line and quantity before applying it. “No 20” identifies the frontlit line in event 1; “aparte” creates a new quote in event 3. In event 4, “los acrilicos” selects Q-002 even though Mario's chat previously linked only to Q-001. The chat records context but does not determine the target. Updates, chat associations, history and the replay response commit together. The prompt requires clarification for ambiguous matches; code independently holds stale revisions for review. Structural checks cannot establish semantic certainty.
 
 ## When the customer says “mejor cancelalo”
 
@@ -48,11 +48,11 @@ With two open quotes, the system stores the message as `needs_clarification`, ex
 
 ## Architecture and trade-offs
 
-Deterministic rules handle the supplied vocabulary, both speaker directions and contextual quantity replies, avoiding model calls for simple work. Initial unqualified “lona” follows the brief's frontlit convention. An optional localhost OpenAI-compatible model can handle unresolved initial extraction through `LOCAL_LLM_URL` and `LOCAL_LLM_MODEL`. Its output must pass catalog, quantity and source-reference validation before persistence. These checks prevent invented SKUs; they cannot prove that a model understood the message correctly.
+Every new initial conversation and inbound follow-up is interpreted by the configured LLM. There are no keyword or regex extraction/routing shortcuts. Select Groq, OpenAI, Claude, or a compatible endpoint through `LLM_PROVIDER`, `LLM_MODEL` and `LLM_API_KEY` in `.env`; see [LLM setup](LLM_SETUP.md). Initial output must pass catalog, quantity and source-reference validation; follow-up actions must target eligible customer quotes and existing lines. Failed or unresolved interpretations enter review without partial mutations. These checks prevent invented SKUs and invalid targets, but cannot prove the model understood the message correctly.
 
-The bounded grammar keeps the exercise understandable and testable, but is not a general Spanish sales assistant. PostgreSQL transactions and an activity log provide durable state without event sourcing or a queue. Customer identity is trusted upstream input; production authentication and general review editing/reprocessing are outside this implementation.
+This trades additional latency, cost and model variability for less dependence on handwritten language patterns. Duplicate deliveries return saved results and outbound follow-ups are recorded without inference. PostgreSQL transactions and an activity log provide durable state without event sourcing or a queue. Initial inference happens outside the transaction; follow-up inference currently holds the customer lock so the model sees the state being updated (20-second model timeout, 30-second transaction timeout). This serializes slow requests for the same customer. Customer identity is trusted upstream input; production authentication and general review editing/reprocessing remain outside scope.
 
-At 1,000 conversations/day, average throughput alone does not justify distributed infrastructure. First measure burst traffic, messages per conversation, model latency/cost and the unresolved-review backlog. Keep inference outside database locks, add pagination as histories grow, and introduce a durable queue with retries if processing latency warrants it. Authentication, observability and broader language evaluation come before production use.
+At 1,000 conversations/day, average throughput alone does not justify distributed infrastructure. First measure burst traffic, messages per conversation, model latency/cost and the unresolved-review backlog. Move follow-up inference outside database locks with version checks and retry on concurrent changes, add pagination as histories grow, and introduce a durable queue with retries if processing latency warrants it. Authentication, observability and broader language evaluation come before production use.
 
 ## Extra credit
 
@@ -63,6 +63,6 @@ At 1,000 conversations/day, average throughput alone does not justify distribute
 
 Create the dedicated `axial_quote_ingestion_test` database and a `.env.test` containing its localhost `TEST_DATABASE_URL`. Apply migrations with `DATABASE_URL` set to that test URL, then run `npm test`. Integration tests clear only the dedicated test database; tests run sequentially.
 
-The latest run passed **48 tests**: 30 unit and 18 PostgreSQL/API integration tests, covering every intermediate state, a fresh-process read, history, isolation, rollback and both extras. API tests call route handlers directly; a running HTTP server, build and live model were not verified. See [the requirements audit](REQUIREMENTS_AUDIT.md) for detailed evidence.
+The earlier rules-based version passed 48 tests. The current LLM-only revision updates tests to use explicit mocked provider responses for persistence and HTTP contracts, and covers validation and mandatory model calls. Those revised tests have not been run. Mocked tests do not evaluate language accuracy. After refining the extraction prompt, a live Groq Phase 1 evaluation passed five cases: three exact-example runs, a paraphrased quantity variant and an explicit unavailable-width request. See [LLM setup](LLM_SETUP.md) for results and the repeatable evaluation command. A subsequent live Phase 2 sequence passed all four required events, duplicate delivery, ambiguous cancellation and a paraphrased revision, with one minute between requests. No message-specific routing code was added. Historical evidence is in [the requirements audit](REQUIREMENTS_AUDIT.md).
 
 AI assistance was substantial: Codex helped analyze the brief, explore the design, write the extraction prompt and implementation, and create tests and documentation. Development proceeded through user-directed stages followed by implementation and testing. Tests and static review exposed defects in transaction writes, replay comparison and parser ambiguity, which were corrected. Generated code and mocked model responses do not establish general language accuracy; that remains a limitation requiring broader evaluation.

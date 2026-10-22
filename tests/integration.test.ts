@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 import { QuotePipeline } from '../src/server/pipeline/service';
 import { initial, events, catalog } from './fixtures';
+import { mockModelFetch } from './mock-model';
 
 try { loadEnvFile('.env.test'); } catch { /* CI may supply TEST_DATABASE_URL explicitly. */ }
 const url = new URL(process.env.TEST_DATABASE_URL ?? '');
@@ -14,6 +15,11 @@ if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || url.pathname 
 process.env.DATABASE_URL = url.href;
 delete process.env.LOCAL_LLM_URL;
 delete process.env.LOCAL_LLM_MODEL;
+process.env.LLM_PROVIDER = 'groq';
+process.env.LLM_MODEL = 'mock-model';
+process.env.LLM_API_KEY = 'test-key';
+const originalFetch = globalThis.fetch;
+globalThis.fetch = mockModelFetch;
 const db = new PrismaClient({ datasources: { db: { url: url.href } } });
 const pipeline = new QuotePipeline(db);
 beforeEach(async () => {
@@ -22,7 +28,7 @@ beforeEach(async () => {
     db.quoteLine.deleteMany(), db.quote.deleteMany(), db.message.deleteMany(), db.conversation.deleteMany(),
   ]);
 });
-after(async () => { await db.$disconnect(); });
+after(async () => { globalThis.fetch = originalFetch; await db.$disconnect(); });
 const quantities = (quote: any) => Object.fromEntries(quote.line_items.map((l: any) => [l.sku, l.qty]));
 async function complete() {
   await pipeline.ingest(initial);
@@ -201,7 +207,7 @@ test('API route handlers validate JSON, create and retrieve quotes, history and 
   await routeDb.$disconnect();
 });
 
-test('PDF acceptance: exact API quote state after initial ingestion and each separate event', async () => {
+test('PDF persistence acceptance with mocked model: exact API quote state after initial ingestion and each separate event', async () => {
   const ingest = await import('../src/app/api/conversations/ingest/route');
   const messages = await import('../src/app/api/messages/route');
   const quotes = await import('../src/app/api/quotes/route');
@@ -275,4 +281,27 @@ test('same text with a new ID creates a real separate quote and makes later acry
   assert.deepEqual(new Set(result.candidates), new Set(before.quotes.slice(1).map(q => q.quote_id)));
   assert.deepEqual(await pipeline.quotes(initial.customer_id), before);
   assert.equal(await db.quoteConversation.count({ where: { conversationId: events[3].conversation_id } }), 0);
+});
+
+test('follow-up model failure is stored for review without changing quotes', async () => {
+  await pipeline.ingest(initial);
+  const before = await pipeline.quotes(initial.customer_id);
+  const failed = new QuotePipeline(db, undefined, async () => { throw new Error('provider failed'); });
+  const response = await failed.message(events[0]) as any;
+  assert.equal(response.status, 'needs_clarification');
+  assert.deepEqual(await pipeline.quotes(initial.customer_id), before);
+  assert.equal((await failed.unresolved(initial.customer_id)).messages.length, 1);
+});
+
+test('replayed histories and messages do not call the model again', async () => {
+  await pipeline.ingest(initial);
+  await pipeline.message(events[0]);
+  const before = await pipeline.quotes(initial.customer_id);
+  let calls = 0;
+  const unexpected = async (): Promise<never> => { calls++; throw new Error('must not call'); };
+  const replay = new QuotePipeline(db, unexpected, unexpected);
+  await replay.ingest(initial);
+  await replay.message(events[0]);
+  assert.equal(calls, 0);
+  assert.deepEqual(await pipeline.quotes(initial.customer_id), before);
 });

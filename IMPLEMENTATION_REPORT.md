@@ -1,5 +1,8 @@
 # Axial local implementation report
 
+> Historical report: this verification describes the earlier rules-based implementation. The current revision removes language patterns and uses the configured LLM for Phase 1 and Phase 2. Revised tests have not been run; see README.md and LLM_SETUP.md for current behavior and limits.
+
+
 Completed October 22, 2026. Scope: the headless assignment pipeline and both optional extras, implemented and tested locally. No application deployment, remote database access, live hosted model calls, Git push, or new commit was performed.
 
 ## Delivered behavior

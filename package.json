@@ -13,7 +13,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
-    "test:unit": "node --import tsx --test --test-concurrency=1 tests/unit.test.ts",
+    "test:unit": "node --import tsx --test --test-concurrency=1 tests/unit.test.ts tests/llm.test.ts tests/routing.test.ts",
     "test:integration": "node --import tsx --test --test-concurrency=1 tests/integration.test.ts",
     "db:deploy": "prisma migrate deploy"
   },
