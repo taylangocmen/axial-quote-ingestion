@@ -21,6 +21,7 @@ Preserve an existing `.env`. `db:deploy` applies local database migrations, incl
 ```sh
 curl -sS http://127.0.0.1:3000/api/conversations/ingest -H 'Content-Type: application/json' --data-binary @examples/initial-conversation.json
 for n in 1 2 3 4; do
+  sleep 60 # Space hosted model calls to reduce rate-limit pressure.
   curl -sS http://127.0.0.1:3000/api/messages -H 'Content-Type: application/json' --data-binary @examples/event-$n.json
   curl -sS 'http://127.0.0.1:3000/api/quotes?customer=C-10029'
 done
@@ -63,6 +64,6 @@ At 1,000 conversations/day, average throughput alone does not justify distribute
 
 Create the dedicated `axial_quote_ingestion_test` database and a `.env.test` containing its localhost `TEST_DATABASE_URL`. Apply migrations with `DATABASE_URL` set to that test URL, then run `npm test`. Integration tests clear only the dedicated test database; tests run sequentially.
 
-The earlier rules-based version passed 48 tests. The current LLM-only revision updates tests to use explicit mocked provider responses for persistence and HTTP contracts, and covers validation and mandatory model calls. Those revised tests have not been run. Mocked tests do not evaluate language accuracy. After refining the extraction prompt, a live Groq Phase 1 evaluation passed five cases: three exact-example runs, a paraphrased quantity variant and an explicit unavailable-width request. See [LLM setup](LLM_SETUP.md) for results and the repeatable evaluation command. A subsequent live Phase 2 sequence passed all four required events, duplicate delivery, ambiguous cancellation and a paraphrased revision, with one minute between requests. No message-specific routing code was added. Historical evidence is in [the requirements audit](REQUIREMENTS_AUDIT.md).
+All **50 automated tests passed**: 30 unit/provider/routing tests and 20 PostgreSQL/API integration tests using mocked model responses. A fresh live Groq evaluation passed five Phase 1 cases and eight full-sequence checks, including all four events, duplicate delivery, cancellation ambiguity and a paraphrased revision. Human cancellation and persistence across an actual server restart also passed. Live model calls were one minute apart; no rate-limit errors occurred. Mocked tests and limited live examples do not establish general language accuracy. See [LLM setup](LLM_SETUP.md#running-live-evaluations) to repeat the live evaluations.
 
 AI assistance was substantial: Codex helped analyze the brief, explore the design, write the extraction prompt and implementation, and create tests and documentation. Development proceeded through user-directed stages followed by implementation and testing. Tests and static review exposed defects in transaction writes, replay comparison and parser ambiguity, which were corrected. Generated code and mocked model responses do not establish general language accuracy; that remains a limitation requiring broader evaluation.

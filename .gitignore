@@ -23,3 +23,9 @@ prisma/*.db-*
 
 # macOS metadata
 .DS_Store
+
+# Local AI-assistant guidance (Next.js may regenerate this)
+/AGENTS.md
+
+# Internal planning and verification notes
+/.local-notes/

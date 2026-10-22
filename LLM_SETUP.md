@@ -1,6 +1,6 @@
 # Configuring an LLM
 
-Every new initial conversation and inbound follow-up uses the configured LLM. There is no pattern parser or fallback mode; the old `LLM_MODE` setting is no longer used. Replayed messages return their saved responses and outbound follow-ups are recorded without inference. Catalog/quantity/source validation and eligible-quote checks remain deterministic. Missing configuration or invalid/failed model output leaves messages for review without quote mutations.
+Every new initial conversation and inbound follow-up uses the configured LLM. Replayed messages return their saved responses and outbound follow-ups are recorded without inference. Catalog/quantity/source validation and eligible-quote checks remain deterministic. Missing configuration or invalid/failed model output leaves messages for review without quote mutations.
 
 ## Groq free tier
 
@@ -47,43 +47,19 @@ The service must support bearer authentication, system/user chat messages and `r
 
 Legacy `LOCAL_LLM_URL` and `LOCAL_LLM_MODEL` remain supported when `LLM_PROVIDER` is unset. An explicit `LLM_PROVIDER=none` disables the model even if legacy variables exist. Credentials and configuration stay on the server. Hosted inference sends the initial conversation and catalog, or a follow-up message with catalog and current customer drafts, to the selected provider; the application and database still run locally.
 
-## Verification status
+## Running live evaluations
 
-Mocked tests cover provider authentication, payloads, mandatory inference, output validation and persistence. They have been updated for LLM-only extraction and routing but not run. They are not language evaluations.
+With the local server running and `.env` configured, run these sequentially:
 
-Before removing the pattern parser, a live HTTP check on October 22, 2026 explicitly forced Groq `openai/gpt-oss-120b`: the exact assignment conversation text (under isolated customer/chat IDs) returned HTTP 200 with frontlit 20, mesh 5, vinyl 5, and a subsequent GET confirmed persistence. Groq request ID: `req_01m5hvdczbe7s9p6b58prmj7rx`. That earlier check covered Phase 1 only; the subsequent Phase 2 live evaluation is recorded below. Other providers have not been live-tested; the original 48-test result predates these changes.
+```sh
+node --import tsx scripts/evaluate-phase1.ts
+sleep 60
+node --import tsx scripts/evaluate-phase2.ts
+```
 
-API references: [Groq](https://console.groq.com/docs/openai), [OpenAI](https://developers.openai.com/api/reference/resources/chat), [Claude](https://platform.claude.com/docs/en/api/messages/create).
+These scripts make real provider calls and create isolated development records with fresh customer IDs. They are separate from `npm test` and wait at least one minute between requests that may invoke the model.
 
-## Phase 1 prompt regression evaluation
+- **Phase 1:** five cases covering the assignment conversation, changed wording/quantities, and an explicit request for an unavailable size. Results: `/tmp/axial-phase1-evaluation.json`.
+- **Phase 2:** eight checks covering initial ingestion, all four events in order, duplicate delivery, ambiguous cancellation and a paraphrased revision. Results: `/tmp/axial-phase2-evaluation.json`.
 
-The prompt now explicitly distinguishes availability inquiries from purchase requests, with generic contrasting examples and a final check of every unresolved item's evidence. No product-specific pattern parser was reintroduced.
-
-On October 22, 2026 the final live evaluation against Groq `openai/gpt-oss-120b` passed **5/5 cases** through the running HTTP API:
-
-- Three independent calls with the exact assignment conversation: frontlit 20, mesh 5, vinyl 5, with saved state verified by GET.
-- Paraphrased conversation with changed quantities: frontlit 7, mesh 3, vinyl 2, with saved state verified.
-- Explicit additional order for three rolls of the unavailable 1.50 m width: held for clarification mentioning that width, with no partial quote saved.
-
-The first prompt revision passed 4/5 cases; one original example still misinterpreted the availability inquiry. A later batch encountered provider 429 responses, so the final batch spaced calls 15 seconds apart and passed all five. This small evaluation demonstrates these cases, not guaranteed model reliability. The full unit/integration suite was not run in that check; the subsequent Phase 2 live evaluation is recorded below.
-
-To repeat deliberately against a running local server: `node --import tsx scripts/evaluate-phase1.ts`. This makes five real model calls and creates isolated development records under fresh `eval-*` customer IDs; it is not part of `npm test`. The latest detailed results are written to `/tmp/axial-phase1-evaluation.json`.
-
-## Phase 2 live evaluation
-
-On October 22, 2026, `scripts/evaluate-phase2.ts` completed **8/8 HTTP checks** against Groq `openai/gpt-oss-120b`, using isolated customer `phase2-eval-17c053de`:
-
-1. Bootstrap: expected three-line draft (20, 5, 5).
-2. Event 1: frontlit 20 → 15, all other lines unchanged.
-3. Event 2: Mario's chat associated with Q-001, no line changes.
-4. Event 3: separate acrylic quote at 2, linked to Alice.
-5. Event 4: acrylic 2 → 4 from Mario's chat, both quotes linked to both chats.
-6. Duplicate event 4: identical saved response, unchanged quote state and history, no new model call.
-7. Ambiguous cancellation: both candidates visible in the review queue, unchanged quote state and history.
-8. Different wording with written-out "siete": acrylic becomes 7, original quote unchanged.
-
-Stored state was checked after every step, with source-linked history checked for all four required events. Server logs confirmed seven successful Groq calls; duplicate delivery bypassed inference. There were no 429 responses in the final sequence. Each POST began at least 60 seconds after the preceding response (measured gaps: 60.001–60.023 seconds). GET verification requests do not invoke the model.
-
-The first attempt failed Event 1 because the model ignored the explicitly stated old quantity when distinguishing two product-family matches. The prompt was clarified to combine product evidence with the old quantity before declaring ambiguity, with a generic example using other products and quantities. No phrase-specific parsing or SKU-specific routing branches were added. Expected fixture values exist only in evaluation assertions.
-
-Repeat deliberately with `node --import tsx scripts/evaluate-phase2.ts` against a running local server. Both live evaluation scripts now wait one minute between test requests. Results are written to `/tmp/axial-phase2-evaluation.json`; failed first-attempt evidence was retained at `/tmp/axial-phase2-evaluation-first-pass.json`. This run verifies the listed scenarios, not general model accuracy; the revised unit/integration suite was not run as part of this live evaluation.
+The latest evaluation passed 5/5 Phase 1 cases and 8/8 Phase 2 checks using Groq `openai/gpt-oss-120b`. All 50 automated tests also passed with mocked model responses. Other providers have adapter tests but have not been live-tested. These examples do not establish general language accuracy; provider quotas and model responses can vary.
