@@ -1,11 +1,25 @@
+# Dependencies
 node_modules/
+
+# Build output and caches
 .next/
 out/
+dist/
 coverage/
 *.tsbuildinfo
+
+# Local configuration (keep the shareable template)
 .env*
 !.env.example
+
+# Local database files
 prisma/*.db
 prisma/*.db-*
+
+# Local evaluation results, temporary files and logs
+/output/
+/tmp/
 *.log
+
+# macOS metadata
 .DS_Store
