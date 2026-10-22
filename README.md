@@ -4,19 +4,28 @@ A headless TypeScript API using Next.js, Zod, Prisma and PostgreSQL. It turns th
 
 ## Run the pipeline
 
-Requires Node 22.12+ within Node 22 and local PostgreSQL. On a fresh checkout:
+Requires Node 22.12+ within Node 22 (`.nvmrc` selects 22) and a running local PostgreSQL server; development used PostgreSQL 17. Run commands from the repository root. On a fresh checkout:
 
 ```sh
 npm ci
 cp .env.example .env
-# Set YOUR_LOCAL_USER and your LLM provider/model/API key in .env.
-createdb -h 127.0.0.1 axial_quote_ingestion
+```
+
+Preserve an existing `.env`. Before continuing:
+
+- Set `DATABASE_URL` to your local PostgreSQL connection, replacing `YOUR_LOCAL_USER` with your database role and adding a password if required. The template uses `127.0.0.1:5432`; the role must be able to create the database and its tables.
+- Uncomment and set `LLM_PROVIDER`, `LLM_MODEL` and `LLM_API_KEY` using [LLM setup](LLM_SETUP.md). These are commented out in the template; without a configured provider, new requests are held for review instead of producing quotes.
+
+Use the same PostgreSQL role, host and port for database creation (replace `YOUR_LOCAL_USER` below):
+
+```sh
+createdb -h 127.0.0.1 -p 5432 -U YOUR_LOCAL_USER axial_quote_ingestion
 npm run db:generate
 npm run db:deploy
 npm run dev
 ```
 
-Preserve an existing `.env`. `db:deploy` applies local database migrations, including the four-product mock catalog; it does not deploy the application. The API binds to `127.0.0.1:3000`.
+Skip `createdb` if the database already exists. `db:deploy` applies local database migrations, including the four-product mock catalog; it does not deploy the application. The API binds to `127.0.0.1:3000` and has no homepage. Keep the server running and execute the following in a second terminal. `GET /api/health` checks server liveness; `GET /api/catalog` checks database access and should return four catalog items.
 
 ```sh
 curl -sS http://127.0.0.1:3000/api/conversations/ingest -H 'Content-Type: application/json' --data-binary @examples/initial-conversation.json
@@ -28,6 +37,8 @@ done
 ```
 
 Initial quantities are frontlit 20, mesh 5 and vinyl 5. The events revise frontlit to 15, link Mario's chat, create a separate acrylic quote at 2, then revise acrylic to 4 from Mario's chat. Both final drafts link to both conversations. Quote IDs are generated; events 2–5 have synthetic IDs/timestamps around the brief's text.
+
+The fixtures use fixed IDs: sending them again replays saved responses, including any earlier unresolved result. For a fresh evaluation after changing configuration or prompts, use the [live evaluation scripts](LLM_SETUP.md#running-live-evaluations), which generate isolated IDs. If a request needs clarification, inspect `/api/unresolved?customer=C-10029` before continuing the sequence.
 
 ## Data model and message routing
 
@@ -62,7 +73,21 @@ At 1,000 conversations/day, average throughput alone does not justify distribute
 
 ## Tests and AI use
 
-Create the dedicated `axial_quote_ingestion_test` database and a `.env.test` containing its localhost `TEST_DATABASE_URL`. Apply migrations with `DATABASE_URL` set to that test URL, then run `npm test`. Integration tests clear only the dedicated test database; tests run sequentially.
+For unit/provider/routing tests only, run `npm run test:unit`; these need neither PostgreSQL nor a live LLM. For the full suite, create `.env.test` with the following line, replacing the role and adding a password if your local server requires one:
+
+```dotenv
+TEST_DATABASE_URL="postgresql://YOUR_LOCAL_USER@127.0.0.1:5432/axial_quote_ingestion_test?schema=public"
+```
+
+Then create and migrate the dedicated test database using the same connection details:
+
+```sh
+createdb -h 127.0.0.1 -p 5432 -U YOUR_LOCAL_USER axial_quote_ingestion_test
+DATABASE_URL='postgresql://YOUR_LOCAL_USER@127.0.0.1:5432/axial_quote_ingestion_test?schema=public' npm run db:deploy
+npm test
+```
+
+Skip creation if it already exists. The migration command overrides the development URL for that command only; Prisma does not automatically load `.env.test`. Integration tests load `TEST_DATABASE_URL` from `.env.test`, require the exact local database name above, and clear its quote/conversation data between cases. Tests run sequentially with mocked LLM responses and do not require a running API server or real provider key.
 
 All **50 automated tests passed**: 30 unit/provider/routing tests and 20 PostgreSQL/API integration tests using mocked model responses. A fresh live Groq evaluation passed five Phase 1 cases and eight full-sequence checks, including all four events, duplicate delivery, cancellation ambiguity and a paraphrased revision. Human cancellation and persistence across an actual server restart also passed. Live model calls were one minute apart; no rate-limit errors occurred. Mocked tests and limited live examples do not establish general language accuracy. See [LLM setup](LLM_SETUP.md#running-live-evaluations) to repeat the live evaluations.
 
